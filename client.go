@@ -35,8 +35,10 @@ func NewClient() (*Client, error) {
 	}
 
 	return &Client{
-		APIKey:      os.Getenv("LANGSMITH_API_KEY"),
-		baseUrl:     fmt.Sprintf("%s/runs", url),
+		baseClient: baseClient{
+			APIKey:  os.Getenv("LANGSMITH_API_KEY"),
+			baseUrl: fmt.Sprintf("%s/runs", url),
+		},
 		projectName: os.Getenv("LANGSMITH_PROJECT_NAME"),
 	}, nil
 }
@@ -44,15 +46,17 @@ func NewClient() (*Client, error) {
 func (c *Client) PostRun(input *RunPayload) error {
 
 	payload := PostPayload{
-		ID:          input.RunID,
-		Name:        input.Name,
-		RunType:     input.RunType,
-		StartTime:   time.Now().UTC(),
-		Inputs:      input.Inputs,
-		SessionName: c.projectName,
-		Tags:        input.Tags,
-		ParentId:    input.ParentID,
-		Extras:      input.Extras,
+		ID:                 input.RunID,
+		Name:               input.Name,
+		RunType:            input.RunType,
+		StartTime:          time.Now().UTC(),
+		Inputs:             input.Inputs,
+		SessionName:        c.projectName,
+		SessionID:          input.SessionID,
+		Tags:               input.Tags,
+		ParentId:           input.ParentID,
+		Extras:             input.Extras,
+		ReferenceExampleID: input.ReferenceExampleID,
 	}
 
 	jsonData, err := json.Marshal(payload)
@@ -66,11 +70,12 @@ func (c *Client) PostRun(input *RunPayload) error {
 
 func (c *Client) PatchRun(id string, input *RunPayload) error {
 	payload := PatchPayload{
-		Outputs: input.Outputs,
-		EndTime: time.Now().UTC(),
-		Events:  input.Events,
-		Extras:  input.Extras,
-		Error:   input.Error,
+		Outputs:   input.Outputs,
+		EndTime:   input.EndTime,
+		Events:    input.Events,
+		Extras:    input.Extras,
+		Error:     input.Error,
+		SessionID: input.SessionID,
 	}
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -94,7 +99,6 @@ func (c *Client) Run(input *RunPayload) error {
 	}
 
 	return c.PostRun(input)
-
 }
 
 /*
@@ -135,10 +139,10 @@ func (c *Client) RunSingle(input *RunPayload) error {
 }
 
 // client for http requests
-func (c *Client) Do(url string, method string, jsonData []byte) error {
+func (c *baseClient) Do(url string, method string, jsonData []byte) error {
 	req, err := http.NewRequest(method, url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	// Set the necessary headers
@@ -153,19 +157,42 @@ func (c *Client) Do(url string, method string, jsonData []byte) error {
 	}
 	defer resp.Body.Close()
 
-	// print a response body for human readability
+	return handleResponse(resp)
+}
 
-	// Check the response status
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		var response Response
-		err = json.Unmarshal(body, &response)
-		if err != nil {
-			return err
-		}
-
-		return errors.New(response.Detail)
+func (c *baseClient) PostForm(url string, body io.Reader, contentType string) error {
+	req, err := http.NewRequest("POST", url, body)
+	if err != nil {
+		panic(err)
 	}
 
-	return nil
+	// Set the necessary headers
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("x-api-key", c.APIKey)
+
+	// Create an HTTP client and send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return handleResponse(resp)
+}
+
+func handleResponse(resp *http.Response) error {
+	if resp.StatusCode < 400 {
+		return nil
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	fmt.Println(string(body))
+	var response Response
+	err := json.Unmarshal(body, &response)
+	if err != nil {
+		return err
+	}
+
+	return errors.New(response.Detail)
 }
